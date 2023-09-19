@@ -1,0 +1,5 @@
+/target
+.env
+archiver.db
+.DS_Store
+files_in_profile_results.txt
