@@ -1,5 +1,5 @@
 use dialoguer::{theme::ColorfulTheme, Select, Input};
-use rs_timeskip_archiver_rewrite1::{create_profile, get_profiles, add_file, get_files};
+use rs_timeskip_archiver::{create_profile, get_profiles, add_file, get_files};
 use tabled::{builder::Builder, settings::Style};
 use unicode_width::UnicodeWidthStr;
 use std::fs::File;

@@ -1,8 +1,8 @@
 use iced::{Application, Command, Element, Settings, Length, Alignment};
 use iced::widget::{Column, Space, Row, Text, Button, Scrollable, Container, ProgressBar, Rule, text_input, PickList, pick_list::State as PickListState};
 use diesel::SqliteConnection;
-use rs_timeskip_archiver_rewrite1::{get_profiles, get_files};
-use rs_timeskip_archiver_rewrite1::models::{Profile, File};
+use rs_timeskip_archiver::{get_profiles, get_files};
+use rs_timeskip_archiver::models::{Profile, File};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use futures::channel::mpsc;
@@ -119,7 +119,7 @@ impl Application for Archiver {
             }
             Message::CreateProfile => {
                 let connection = Arc::clone(&self.connection);
-                let _ = rs_timeskip_archiver_rewrite1::create_profile(&mut *connection.lock().unwrap(), &self.input_value);
+                let _ = rs_timeskip_archiver::create_profile(&mut *connection.lock().unwrap(), &self.input_value);
                 self.input_value.clear();
                 Command::perform(async { Message::ProfileRefresh }, |msg| msg)
             }
@@ -175,7 +175,7 @@ impl Application for Archiver {
                                 let file_path_str = file_path.to_str().unwrap_or("");
                                 
                                 let mut connection = connection.lock().unwrap();
-                                let _ = rs_timeskip_archiver_rewrite1::add_file(&mut *connection, file_path_str, &profile_id, &mut tx_clone, index, file_paths_for_thread.len());
+                                let _ = rs_timeskip_archiver::add_file(&mut *connection, file_path_str, &profile_id, &mut tx_clone, index, file_paths_for_thread.len());
                             }
                         });
                         

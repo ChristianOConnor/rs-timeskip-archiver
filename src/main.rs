@@ -1,6 +1,6 @@
 mod cli;
 mod ui;
-use rs_timeskip_archiver_rewrite1::establish_connection;
+use rs_timeskip_archiver::establish_connection;
 use std::env;
 use iced::Settings;
 
