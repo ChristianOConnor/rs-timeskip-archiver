@@ -51,6 +51,7 @@ pub fn add_file(
     let file_path_buf = std::path::PathBuf::from(file_path);
 
     if file_path_buf.exists() {
+        // Hash file
         let mut file_blob = std::fs::File::open(file_path).unwrap();
         let mut hasher = Sha3_256::new();
         std::io::copy(&mut file_blob, &mut hasher).unwrap();
@@ -58,6 +59,7 @@ pub fn add_file(
         let file_out_hash = format!("{:x}", hasher.finalize());
         let new_file = NewFile { file_name: file_path, sha256: &file_out_hash, profile_id: *pid };
 
+        // Insert file into database
         diesel::insert_into(files::table)
             .values(&new_file)
             .execute(conn)?;

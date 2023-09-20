@@ -12,9 +12,11 @@ use std::time::Duration;
 
 
 pub fn run_ui(connection: SqliteConnection) -> Result<(), iced::Error> {
+    // Run the UI with the given database connection
     Archiver::run(Settings::with_flags(Arc::new(Mutex::new(connection))))
 }
 
+// Define the possible messages that can be sent to the UI
 #[derive(Debug, Clone)]
 pub enum Message {
     ProfileInputChanged(String),
@@ -34,6 +36,7 @@ pub enum Message {
     FileUploadCompleted,
 }
 
+// Define the possible loading states for the UI
 #[derive(Clone)]
 pub enum LoadingState {
     Idle,
@@ -41,6 +44,7 @@ pub enum LoadingState {
     Loaded,
 }
 
+// Define the main UI struct
 pub struct Archiver {
     input_value: String,
     profiles: Vec<Profile>,
@@ -54,6 +58,7 @@ pub struct Archiver {
     file_upload_progress: FileUploadProgress,
 }
 
+// Define the file upload progress struct
 #[derive(Clone)]
 struct FileUploadProgress {
     current: usize,
@@ -61,6 +66,7 @@ struct FileUploadProgress {
 }
 
 impl FileUploadProgress {
+    // Calculate the current progress ratio
     fn ratio(&self) -> f32 {
         if self.total == 0 {
             0.0
@@ -71,11 +77,13 @@ impl FileUploadProgress {
 }
 
 impl Application for Archiver {
+    // Define the application type, message type, flags type, and theme type
     type Executor = iced::executor::Default;
     type Message = Message;
     type Flags = Arc<Mutex<SqliteConnection>>;
     type Theme = iced::theme::Theme;
 
+    // Initialize the UI with the given flags (database connection)
     fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
         (
             Self {
@@ -93,41 +101,50 @@ impl Application for Archiver {
                     total: 0,
                 },
             },
+            // Load the profiles asynchronously and send a message when done
             Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles)
         )
     }
 
+    // Set the title of the UI window
     fn title(&self) -> String {
         String::from("Archiver")
     }
 
+    // Handle incoming messages and return a command to execute
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         println!("Received message: {:?}", message);
         match message {
             Message::LoadProfiles => {
+                // Load the profiles from the database and send a message when done
                 let connection = Arc::clone(&self.connection);
                 let profiles = get_profiles(&mut *connection.lock().unwrap());
                 Command::perform(async { profiles }, Message::ProfilesLoaded)
             }
             Message::ProfilesLoaded(profiles) => {
+                // Update the UI with the loaded profiles
                 self.profiles = profiles;
                 Command::none()
             }
             Message::ProfileInputChanged(value) => {
+                // Update the input value for creating a new profile
                 self.input_value = value;
                 Command::none()
             }
             Message::CreateProfile => {
+                // Create a new profile with the given name
                 let connection = Arc::clone(&self.connection);
                 let _ = rs_timeskip_archiver::create_profile(&mut *connection.lock().unwrap(), &self.input_value);
                 self.input_value.clear();
                 Command::perform(async { Message::ProfileRefresh }, |msg| msg)
             }
             Message::ProfileSelected(profile) => {
+                // Select a profile and load its files
                 self.selected_profile = Some(profile);
                 Command::perform(async { Message::LoadFiles }, |msg| msg)
             }
             Message::LoadFiles => {
+                // Load the files for the selected profile
                 if let Some(profile) = &self.selected_profile {
                     let connection = Arc::clone(&self.connection);
                     let files = get_files(&mut *connection.lock().unwrap(), &profile.id);
@@ -137,6 +154,7 @@ impl Application for Archiver {
                 }
             }
             Message::ProgressTick(_) => {
+                // Update the file upload progress
                 self.file_upload_progress.current += 1;
                 if self.file_upload_progress.current >= self.file_upload_progress.total {
                     self.file_upload_progress.current = 0;
@@ -145,18 +163,22 @@ impl Application for Archiver {
                 Command::none()
             }
             Message::FilesLoaded(files) => {
+                // Update the UI with the loaded files
                 self.files = files;
                 Command::none()
             }
             Message::FileSelected(file) => {
+                // Select a file
                 self.selected_file = Some(file);
                 Command::none()
             }
             Message::OpenFileDialog => {
+                // Open a file dialog to choose files to upload
                 println!("Open file dialog called.");
                 Command::perform(open_file_dialog(), Message::FileChosen)
             }
             Message::FileChosen(file_paths_result) => {
+                // Upload the chosen files for the selected profile
                 if let Some(profile) = &self.selected_profile {
                     if let Ok(file_paths) = file_paths_result.clone() {
                         // Clone necessary data for thread.
@@ -191,6 +213,7 @@ impl Application for Archiver {
             }
 
             Message::UpdateFileUploadProgress(_, total) => {
+                // Update the file upload progress
                 println!("Updating file upload progress: current = {}, total = {}", self.file_upload_progress.current, total);
                 self.file_upload_progress.current += 1;
                 self.file_upload_progress.total = total;
@@ -198,15 +221,18 @@ impl Application for Archiver {
             }
 
             Message::FileUploadCompleted => {
+                // Reset the file upload progress and refresh the UI
                 self.file_upload_progress.current = 0;
                 self.file_upload_progress.total = 0;
                 self.loading_state = LoadingState::Loaded;
                 Command::perform(async { Message::Refresh }, |msg| msg)
             }
             Message::ProfileRefresh => {
+                // Refresh the profiles
                 Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles)
             }
             Message::Refresh => {
+                // Refresh the files for the selected profile
                 if let Some(profile) = &self.selected_profile {
                     let connection = Arc::clone(&self.connection);
                     let files = get_files(&mut *connection.lock().unwrap(), &profile.id);
@@ -218,6 +244,7 @@ impl Application for Archiver {
         }
     }
 
+    // Subscribe to progress updates if there are any ongoing file uploads
     fn subscription(&self) -> Subscription<Message> {
         if self.file_upload_progress.total > 0 && self.file_upload_progress.current < self.file_upload_progress.total {
             iced::time::every(Duration::from_millis(100)).map(|_| Message::ProgressTick(1))
@@ -226,6 +253,7 @@ impl Application for Archiver {
         }
     }
 
+    // Define the UI view
     fn view(&self) -> Element<Self::Message> {
         let pick_list = PickList::new(
             &self.profiles,
@@ -278,8 +306,8 @@ impl Application for Archiver {
                 .push(Rule::horizontal(10))
                 .push(
                     Row::new()
-                        .push(Scrollable::new(file_names_panel).width(Length::FillPortion(1))) // remove & here
-                        .push(Scrollable::new(file_properties_panel).width(Length::FillPortion(1))) // and here
+                        .push(Scrollable::new(file_names_panel).width(Length::FillPortion(1)))
+                        .push(Scrollable::new(file_properties_panel).width(Length::FillPortion(1)))
                 );
         }
 
@@ -305,6 +333,7 @@ impl Application for Archiver {
     }
 }
 
+// Open a file dialog to choose files to upload
 async fn open_file_dialog() -> Result<Vec<PathBuf>, String> {
     if let Some(paths) = rfd::FileDialog::new().pick_files() {
         Ok(paths.into_iter().map(|path| path.into()).collect()) // Convert into Vec<PathBuf>
