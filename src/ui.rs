@@ -1,15 +1,16 @@
-use iced::{Application, Command, Element, Settings, Length, Alignment};
-use iced::widget::{Column, Space, Row, Text, Button, Scrollable, Container, ProgressBar, Rule, text_input, PickList, pick_list::State as PickListState};
 use diesel::SqliteConnection;
-use rs_timeskip_archiver::{get_profiles, get_files};
-use rs_timeskip_archiver::models::{Profile, File};
+use futures::channel::mpsc;
+use iced::widget::{
+    text_input, Button, Column, Container, PickList, ProgressBar, Row, Rule, Scrollable, Space,
+    Text,
+};
+use iced::Subscription;
+use iced::{Alignment, Application, Command, Element, Length, Settings};
+use rs_timeskip_archiver::models::{File, Profile};
+use rs_timeskip_archiver::{get_files, get_profiles};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use futures::channel::mpsc;
-use futures::StreamExt;
-use iced::{Subscription, time};
 use std::time::Duration;
-
 
 pub fn run_ui(connection: SqliteConnection) -> Result<(), iced::Error> {
     // Run the UI with the given database connection
@@ -33,7 +34,6 @@ pub enum Message {
     ProfileRefresh,
     Refresh,
     UpdateFileUploadProgress(usize, usize),
-    FileUploadCompleted,
 }
 
 // Define the possible loading states for the UI
@@ -102,7 +102,7 @@ impl Application for Archiver {
                 },
             },
             // Load the profiles asynchronously and send a message when done
-            Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles)
+            Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles),
         )
     }
 
@@ -134,7 +134,10 @@ impl Application for Archiver {
             Message::CreateProfile => {
                 // Create a new profile with the given name
                 let connection = Arc::clone(&self.connection);
-                let _ = rs_timeskip_archiver::create_profile(&mut *connection.lock().unwrap(), &self.input_value);
+                let _ = rs_timeskip_archiver::create_profile(
+                    &mut *connection.lock().unwrap(),
+                    &self.input_value,
+                );
                 self.input_value.clear();
                 Command::perform(async { Message::ProfileRefresh }, |msg| msg)
             }
@@ -159,6 +162,9 @@ impl Application for Archiver {
                 if self.file_upload_progress.current >= self.file_upload_progress.total {
                     self.file_upload_progress.current = 0;
                     self.file_upload_progress.total = 0;
+
+                    self.loading_state = LoadingState::Loaded;
+                    return Command::perform(async { Message::Refresh }, |msg| msg);
                 }
                 Command::none()
             }
@@ -186,23 +192,30 @@ impl Application for Archiver {
                         let profile_id = profile.id.clone();
                         let file_paths_for_length = file_paths.clone();
                         let file_paths_for_thread = file_paths.clone();
-                        
+
                         // Create a channel for communication.
-                        let (mut tx, mut rx) = mpsc::channel::<(usize, usize)>(1);
-                        
+                        let (tx, _rx) = mpsc::channel::<(usize, usize)>(1);
+
                         // Start a single worker thread to handle all file uploads.
                         std::thread::spawn(move || {
                             for (index, file_path) in file_paths_for_thread.iter().enumerate() {
-                                let mut tx_clone = tx.clone();  // clone the sender and declare it as mutable
+                                let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
                                 let file_path_str = file_path.to_str().unwrap_or("");
-                                
+
                                 let mut connection = connection.lock().unwrap();
-                                let _ = rs_timeskip_archiver::add_file(&mut *connection, file_path_str, &profile_id, &mut tx_clone, index, file_paths_for_thread.len());
+                                let _ = rs_timeskip_archiver::add_file(
+                                    &mut *connection,
+                                    file_path_str,
+                                    &profile_id,
+                                    &mut tx_clone,
+                                    index,
+                                    file_paths_for_thread.len(),
+                                );
                             }
                         });
-                        
+
                         self.file_upload_progress.total = file_paths_for_length.len();
-                        Command::perform(async { Message::FileUploadCompleted }, |msg| msg)
+                        Command::none()
                     } else {
                         // Handle file dialog error here...
                         Command::none()
@@ -214,19 +227,15 @@ impl Application for Archiver {
 
             Message::UpdateFileUploadProgress(_, total) => {
                 // Update the file upload progress
-                println!("Updating file upload progress: current = {}, total = {}", self.file_upload_progress.current, total);
+                println!(
+                    "Updating file upload progress: current = {}, total = {}",
+                    self.file_upload_progress.current, total
+                );
                 self.file_upload_progress.current += 1;
                 self.file_upload_progress.total = total;
                 Command::none()
             }
 
-            Message::FileUploadCompleted => {
-                // Reset the file upload progress and refresh the UI
-                self.file_upload_progress.current = 0;
-                self.file_upload_progress.total = 0;
-                self.loading_state = LoadingState::Loaded;
-                Command::perform(async { Message::Refresh }, |msg| msg)
-            }
             Message::ProfileRefresh => {
                 // Refresh the profiles
                 Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles)
@@ -246,7 +255,9 @@ impl Application for Archiver {
 
     // Subscribe to progress updates if there are any ongoing file uploads
     fn subscription(&self) -> Subscription<Message> {
-        if self.file_upload_progress.total > 0 && self.file_upload_progress.current < self.file_upload_progress.total {
+        if self.file_upload_progress.total > 0
+            && self.file_upload_progress.current < self.file_upload_progress.total
+        {
             iced::time::every(Duration::from_millis(100)).map(|_| Message::ProgressTick(1))
         } else {
             Subscription::none()
@@ -258,7 +269,7 @@ impl Application for Archiver {
         let pick_list = PickList::new(
             &self.profiles,
             self.selected_profile.clone(),
-            Message::ProfileSelected
+            Message::ProfileSelected,
         );
 
         let profile_text_input = text_input("New profile name here...", &self.input_value)
@@ -274,7 +285,8 @@ impl Application for Archiver {
             .push(Button::new(Text::new("Create Profile")).on_press(Message::CreateProfile));
 
         if self.selected_profile.is_some() {
-            top_bar = top_bar.push(Button::new(Text::new("Upload File")).on_press(Message::OpenFileDialog));
+            top_bar = top_bar
+                .push(Button::new(Text::new("Upload File")).on_press(Message::OpenFileDialog));
         }
 
         let file_names_panel = self.files.iter().fold(Column::new(), |column, file| {
@@ -283,7 +295,10 @@ impl Application for Archiver {
             } else {
                 file.file_name.clone()
             };
-            column.push(Button::new(Text::new(truncated_file_name.clone())).on_press(Message::FileSelected(file.clone())))
+            column.push(
+                Button::new(Text::new(truncated_file_name.clone()))
+                    .on_press(Message::FileSelected(file.clone())),
+            )
         });
 
         let file_properties_panel = if let Some(file) = &self.selected_file {
@@ -296,34 +311,32 @@ impl Application for Archiver {
             Column::new()
         };
 
-        let mut content = Column::new()
-            .spacing(10)
-            .padding(10)
-            .push(top_bar);
+        let mut content = Column::new().spacing(10).padding(10).push(top_bar);
 
         if self.selected_profile.is_some() {
-            content = content
-                .push(Rule::horizontal(10))
-                .push(
-                    Row::new()
-                        .push(Scrollable::new(file_names_panel).width(Length::FillPortion(1)))
-                        .push(Scrollable::new(file_properties_panel).width(Length::FillPortion(1)))
-                );
+            content = content.push(Rule::horizontal(10)).push(
+                Row::new()
+                    .push(Scrollable::new(file_names_panel).width(Length::FillPortion(1)))
+                    .push(Scrollable::new(file_properties_panel).width(Length::FillPortion(1))),
+            );
         }
 
         // This is a filler container to push everything else down
         content = content.push(Container::new(Space::new(Length::Fill, Length::Shrink)));
 
         // The progress bar part
-        println!("Rendering progress bar with ratio: {}", self.file_upload_progress.ratio());
+        println!(
+            "Rendering progress bar with ratio: {}",
+            self.file_upload_progress.ratio()
+        );
         content = content.push(
             Column::new()
-                .push(Space::new(Length::Fill, Length::Fill))  // Add this line
+                .push(Space::new(Length::Fill, Length::Fill)) // Add this line
                 .push(Text::new("File Upload Progress"))
                 .push(
                     ProgressBar::new(0.0..=1.0, self.file_upload_progress.ratio())
-                        .width(Length::Fill) // Make it span the width of the window
-                )
+                        .width(Length::Fill), // Make it span the width of the window
+                ),
         );
 
         Container::new(content)

@@ -6,7 +6,7 @@ use dotenvy::dotenv;
 use std::env;
 use sha3::{Digest, Sha3_256};
 use futures::channel::mpsc::Sender as FuturesSender;
-use futures::executor::block_on;
+
 
 
 use crate::models::{Profile, NewProfile, File, NewFile};
