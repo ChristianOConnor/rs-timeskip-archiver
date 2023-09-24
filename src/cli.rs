@@ -1,11 +1,11 @@
 use dialoguer::{theme::ColorfulTheme, Select, Input};
 use rs_timeskip_archiver::{create_profile, get_profiles, add_file, get_files};
 use tabled::{builder::Builder, settings::Style};
-use unicode_width::UnicodeWidthStr;
+
 use std::fs::File;
 use std::io::Write;
 use diesel::prelude::*;
-use futures::channel::mpsc;
+
 
 
 pub fn run_cli(connection: &mut SqliteConnection) {

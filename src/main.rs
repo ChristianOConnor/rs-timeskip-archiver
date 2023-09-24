@@ -2,7 +2,7 @@ mod cli;
 mod ui;
 use rs_timeskip_archiver::establish_connection;
 use std::env;
-use iced::Settings;
+
 
 
 fn main() {
