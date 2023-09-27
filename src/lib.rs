@@ -3,19 +3,16 @@ pub mod schema;
 
 use diesel::prelude::*;
 use dotenvy::dotenv;
-use std::env;
-use sha3::{Digest, Sha3_256};
 use futures::channel::mpsc::Sender as FuturesSender;
+use sha3::{Digest, Sha3_256};
+use std::env;
 
-
-
-use crate::models::{Profile, NewProfile, File, NewFile};
+use crate::models::{File, NewFile, NewProfile, Profile};
 
 pub fn establish_connection() -> SqliteConnection {
     dotenv().ok();
 
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     SqliteConnection::establish(&database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
@@ -35,16 +32,18 @@ pub fn create_profile(conn: &mut SqliteConnection, profile_name: &str) {
 pub fn get_profiles(conn: &mut SqliteConnection) -> Vec<Profile> {
     use schema::profiles::dsl::*;
 
-    profiles.load::<Profile>(conn).expect("Error loading profiles")
+    profiles
+        .load::<Profile>(conn)
+        .expect("Error loading profiles")
 }
 
 pub fn add_file(
-    conn: &mut SqliteConnection, 
-    file_path: &str, 
-    pid: &i32, 
-    tx: &mut FuturesSender<(usize, usize)>, 
-    current_file_index: usize, 
-    total_files: usize
+    conn: &mut SqliteConnection,
+    file_path: &str,
+    pid: &i32,
+    tx: &mut FuturesSender<(usize, usize)>,
+    current_file_index: usize,
+    total_files: usize,
 ) -> Result<usize, diesel::result::Error> {
     use schema::files;
 
@@ -57,7 +56,11 @@ pub fn add_file(
         std::io::copy(&mut file_blob, &mut hasher).unwrap();
 
         let file_out_hash = format!("{:x}", hasher.finalize());
-        let new_file = NewFile { file_name: file_path, sha256: &file_out_hash, profile_id: *pid };
+        let new_file = NewFile {
+            file_name: file_path,
+            sha256: &file_out_hash,
+            profile_id: *pid,
+        };
 
         // Insert file into database
         diesel::insert_into(files::table)
@@ -78,7 +81,8 @@ pub fn add_file(
 pub fn get_files(conn: &mut SqliteConnection, pid: &i32) -> Vec<File> {
     use schema::files::dsl::*;
 
-    files.filter(profile_id.eq(pid))
+    files
+        .filter(profile_id.eq(pid))
         .load::<File>(conn)
         .expect("Error loading files")
 }
