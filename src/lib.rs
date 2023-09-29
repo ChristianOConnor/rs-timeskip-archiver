@@ -45,6 +45,7 @@ pub fn add_file(
     current_file_index: usize,
     total_files: usize,
 ) -> Result<usize, diesel::result::Error> {
+    println!("add_file started for {}", file_path);
     use schema::files;
 
     let file_path_buf = std::path::PathBuf::from(file_path);
@@ -71,6 +72,7 @@ pub fn add_file(
         if tx.try_send((current_file_index, total_files)).is_err() {
             println!("Receiver has been dropped.");
         }
+        println!("add_file ended for {}", file_path);
 
         Ok(2)
     } else {
