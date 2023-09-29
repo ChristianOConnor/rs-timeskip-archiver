@@ -12,6 +12,10 @@ use rs_timeskip_archiver::{get_files, get_profiles};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use rayon::prelude::*;
+use tokio::fs;
+
+
 
 pub fn run_ui(connection: SqliteConnection) -> Result<(), iced::Error> {
     // Run the UI with the given database connection
@@ -22,7 +26,7 @@ pub fn run_ui(connection: SqliteConnection) -> Result<(), iced::Error> {
 #[derive(Debug, Clone)]
 pub enum Message {
     ProfileInputChanged(String),
-    ProgressTick(usize),
+    RunBlank,
     CreateProfile,
     LoadProfiles,
     ProfilesLoaded(Vec<Profile>),
@@ -157,7 +161,21 @@ impl Application for Archiver {
                     Command::none()
                 }
             }
-            Message::ProgressTick(_) => {
+            Message::RunBlank => {
+                // Select a file
+                println!("Running blank");
+                println!(
+                    "From RunBlank: Rendering progress bar with ratio: {}",
+                    self.file_upload_progress.ratio()
+                );
+                println!(
+                    "From RunBlank: Current Files: {}",
+                    self.file_upload_progress.current
+                );
+                println!(
+                    "From RunBlank: Total Files: {}",
+                    self.file_upload_progress.total
+                );
                 Command::none()
             }
             Message::FilesLoaded(files) => {
@@ -188,29 +206,27 @@ impl Application for Archiver {
                         // Create a channel for communication.
                         let (tx, mut rx) = mpsc::channel::<(usize, usize)>(1);
 
-                        // Start a single worker thread to handle all file uploads.
-                        std::thread::spawn(move || {
-                            for (index, file_path) in file_paths_for_thread.iter().enumerate() {
-                                let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
-                                let file_path_str = file_path.to_str().unwrap_or("");
-
-                                let mut connection = connection.lock().unwrap();
-                                let _ = rs_timeskip_archiver::add_file(
-                                    &mut *connection,
-                                    file_path_str,
-                                    &profile_id,
-                                    &mut tx_clone,
-                                    index,
-                                    file_paths_for_thread.len(),
-                                );
-                            }
+                        // Use Rayon to process files in parallel
+                        file_paths.par_iter().enumerate().for_each(|(index, file_path)| {
+                            let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
+                            let file_path_str = file_path.to_str().unwrap_or("");
+                            
+                            let mut connection = connection.lock().unwrap();
+                            let _ = rs_timeskip_archiver::add_file(
+                                &mut *connection,
+                                file_path_str,
+                                &profile_id,
+                                &mut tx_clone,
+                                index,
+                                file_paths.len(),
+                            );
                         });
 
                         self.file_upload_progress.total = file_paths_for_length.len();
 
                         let rx_clone = Arc::new(Mutex::new(rx));
 
-                        Command::perform(async { rx_clone }, Message::UpdateFileUploadProgress)
+                        Command::perform(async move { Arc::clone(&rx_clone) }, Message::UpdateFileUploadProgress)
                     } else {
                         // Handle file dialog error here...
                         Command::none()
@@ -221,34 +237,35 @@ impl Application for Archiver {
             }
 
             Message::UpdateFileUploadProgress(rx_clone) => {
+                // Create a new clone for the async block
+                let rx_for_async = Arc::clone(&rx_clone);
+            
+                // Create the Command using this new clone
+                let cmd = Command::perform(
+                    async move { Arc::clone(&rx_for_async) },
+                    Message::UpdateFileUploadProgress
+                );
+                
                 let mut rx = rx_clone.lock().unwrap();
-
+            
                 match rx.try_next() {
                     Ok(val) => match val {
                         Some(msg) => {
                             println!("Received progress: {} / {}", msg.0, msg.1);
                             self.file_upload_progress.current += 1;
-                            if self.file_upload_progress.current >= self.file_upload_progress.total
-                            {
+                            if self.file_upload_progress.current >= self.file_upload_progress.total {
                                 self.file_upload_progress.current = 0;
                                 self.file_upload_progress.total = 0;
-
+            
                                 self.loading_state = LoadingState::Loaded;
                                 return Command::perform(async { Message::Refresh }, |msg| msg);
                             }
-
-                            let rx_clone = Arc::clone(&rx_clone);
-                            return Command::perform(
-                                async { rx_clone },
-                                Message::UpdateFileUploadProgress,
-                            );
+            
+                            cmd
                         }
                         None => Command::none(),
                     },
-                    Err(e) => {
-                        let rx_clone = Arc::clone(&rx_clone);
-                        Command::perform(async { rx_clone }, Message::UpdateFileUploadProgress)
-                    }
+                    Err(e) => cmd,
                 }
             }
 
@@ -271,7 +288,12 @@ impl Application for Archiver {
 
     // Subscribe to progress updates if there are any ongoing file uploads
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::none()
+        println!("Checking subscription. Current: {}, Total: {}", self.file_upload_progress.current, self.file_upload_progress.total);
+        if self.file_upload_progress.total > 0 && self.file_upload_progress.current < self.file_upload_progress.total {
+            iced::time::every(Duration::from_millis(500)).map(|_| Message::RunBlank)
+        } else {
+            Subscription::none()
+        }
     }
 
     // Define the UI view
