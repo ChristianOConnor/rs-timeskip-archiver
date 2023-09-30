@@ -9,6 +9,17 @@ use std::env;
 
 use crate::models::{File, NewFile, NewProfile, Profile};
 
+
+
+pub struct AddFileParams<'a> {
+    pub connection: &'a mut diesel::SqliteConnection,
+    pub file_path_str: &'a str,
+    pub profile_id: &'a i32,
+    pub tx_clone: &'a mut FuturesSender<(usize, usize)>,
+    pub index: usize,
+    pub total_files: usize,
+}
+
 pub fn establish_connection() -> SqliteConnection {
     dotenv().ok();
 
@@ -37,42 +48,35 @@ pub fn get_profiles(conn: &mut SqliteConnection) -> Vec<Profile> {
         .expect("Error loading profiles")
 }
 
-pub fn add_file(
-    conn: &mut SqliteConnection,
-    file_path: &str,
-    pid: &i32,
-    tx: &mut FuturesSender<(usize, usize)>,
-    current_file_index: usize,
-    total_files: usize,
-) -> Result<usize, diesel::result::Error> {
-    println!("add_file started for {}", file_path);
+pub fn add_file(file_param: AddFileParams) -> Result<usize, diesel::result::Error> {
+    println!("add_file started for {}", file_param.file_path_str);
     use schema::files;
 
-    let file_path_buf = std::path::PathBuf::from(file_path);
+    let file_path_buf = std::path::PathBuf::from(file_param.file_path_str);
 
     if file_path_buf.exists() {
         // Hash file
-        let mut file_blob = std::fs::File::open(file_path).unwrap();
+        let mut file_blob = std::fs::File::open(file_param.file_path_str).unwrap();
         let mut hasher = Sha3_256::new();
         std::io::copy(&mut file_blob, &mut hasher).unwrap();
 
         let file_out_hash = format!("{:x}", hasher.finalize());
         let new_file = NewFile {
-            file_name: file_path,
+            file_name: file_param.file_path_str,
             sha256: &file_out_hash,
-            profile_id: *pid,
+            profile_id: *file_param.profile_id,
         };
 
         // Insert file into database
         diesel::insert_into(files::table)
             .values(&new_file)
-            .execute(conn)?;
+            .execute(file_param.connection)?;
 
         // Send progress update
-        if tx.try_send((current_file_index, total_files)).is_err() {
+        if file_param.tx_clone.try_send((file_param.index, file_param.total_files)).is_err() {
             println!("Receiver has been dropped.");
         }
-        println!("add_file ended for {}", file_path);
+        println!("add_file ended for {}", file_param.file_path_str);
 
         Ok(2)
     } else {

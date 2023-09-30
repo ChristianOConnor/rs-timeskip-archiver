@@ -7,12 +7,13 @@ use iced::widget::{
 use iced::Subscription;
 use iced::{Alignment, Application, Command, Element, Length, Settings};
 use rs_timeskip_archiver::models::{File, Profile};
-use rs_timeskip_archiver::{get_files, get_profiles};
+use rs_timeskip_archiver::{get_files, get_profiles, AddFileParams};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use rayon::prelude::*;
 mod download;
+use futures::channel::mpsc::Sender as FuturesSender;
 
 
 
@@ -238,14 +239,15 @@ impl Application for Archiver {
                             let file_path_str = file_path.to_str().unwrap_or("");
                             
                             let mut connection = connection.lock().unwrap();
-                            let _ = rs_timeskip_archiver::add_file(
-                                &mut *connection,
+                            let file_params = AddFileParams {
+                                connection: &mut *connection,
                                 file_path_str,
-                                &profile_id,
-                                &mut tx_clone,
+                                profile_id: &profile_id,
+                                tx_clone: &mut tx_clone,
                                 index,
-                                file_paths.len(),
-                            );
+                                total_files: file_paths.len(),
+                            };
+                            let _ = rs_timeskip_archiver::add_file(file_params);
                         });
 
                         self.file_upload_progress.total = file_paths_for_length.len();

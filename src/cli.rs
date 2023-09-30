@@ -1,6 +1,8 @@
 use dialoguer::{theme::ColorfulTheme, Select, Input};
-use rs_timeskip_archiver::{create_profile, get_profiles, add_file, get_files};
+use rs_timeskip_archiver::{create_profile, get_profiles, add_file, get_files, AddFileParams};
 use tabled::{builder::Builder, settings::Style};
+use futures::channel::mpsc::Sender as FuturesSender;
+use futures::channel::mpsc::{self, Sender};
 
 use std::fs::File;
 use std::io::Write;
@@ -136,9 +138,17 @@ pub fn run_cli(connection: &mut SqliteConnection) {
                             break;
                         }
 
-                        let (tx, _rx) = futures::channel::mpsc::channel::<(usize, usize)>(1);
+                        let (tx, _rx) = mpsc::channel::<(usize, usize)>(1);
                         let mut tx_clone = tx.clone();
-                        match add_file(connection, &filepath_input, &selected_profile.id, &mut tx_clone, 1, 1) {
+                        let file_param = AddFileParams {
+                            connection,
+                            file_path_str: &filepath_input,
+                            profile_id: &selected_profile.id,
+                            tx_clone: &mut tx_clone,
+                            index: 1,
+                            total_files: 1,
+                        };
+                        match add_file(file_param) {
                             Ok(file_find_response) => println!("{}", file_find_response),
                             Err(e) => println!("Failed to add file: {}", e),
                         }
