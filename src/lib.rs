@@ -20,6 +20,41 @@ pub struct AddFileParams<'a> {
     pub total_files: usize,
 }
 
+pub trait FileParams {
+    fn connection(&mut self) -> &mut diesel::SqliteConnection;
+    fn file_path_str(&self) -> &str;
+    fn profile_id(&self) -> &i32;
+    fn tx_clone(&mut self) -> &mut FuturesSender<(usize, usize)>;
+    fn index(&self) -> usize;
+    fn total_files(&self) -> usize;
+}
+
+impl<'a> FileParams for AddFileParams<'a> {
+    fn connection(&mut self) -> &mut diesel::SqliteConnection {
+        self.connection
+    }
+
+    fn file_path_str(&self) -> &str {
+        self.file_path_str
+    }
+
+    fn profile_id(&self) -> &i32 {
+        self.profile_id
+    }
+
+    fn tx_clone(&mut self) -> &mut FuturesSender<(usize, usize)> {
+        self.tx_clone
+    }
+
+    fn index(&self) -> usize {
+        self.index
+    }
+
+    fn total_files(&self) -> usize {
+        self.total_files
+    }
+}
+
 pub fn establish_connection() -> SqliteConnection {
     dotenv().ok();
 

@@ -53,7 +53,7 @@ pub enum LoadingState {
 }
 
 // Define the main UI struct
-pub struct Archiver {
+pub struct Archiver<'a> {
     input_value: String,
     profiles: Vec<Profile>,
     selected_profile: Option<Profile>,
@@ -64,8 +64,9 @@ pub struct Archiver {
     selected_file: Option<File>,
     loading_state: LoadingState,
     file_upload_progress: FileUploadProgress,
-    downloads: Vec<Download>,
+    downloads: Vec<Download<'a>>,
     last_id: usize,
+    array_of_fileparams: Vec<AddFileParams<'a>>,
 }
 
 // Define the file upload progress struct
@@ -86,7 +87,7 @@ impl FileUploadProgress {
     }
 }
 
-impl Application for Archiver {
+impl<'a> Application for Archiver<'a> {
     // Define the application type, message type, flags type, and theme type
     type Executor = iced::executor::Default;
     type Message = Message;
@@ -112,6 +113,7 @@ impl Application for Archiver {
                 },
                 downloads: vec![Download::new(0)],
                 last_id: 0,
+                array_of_fileparams: Vec::new(),
             },
             // Load the profiles asynchronously and send a message when done
             Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles),
@@ -233,10 +235,11 @@ impl Application for Archiver {
                         // Create a channel for communication.
                         let (tx, mut rx) = mpsc::channel::<(usize, usize)>(1);
 
-                        // Use Rayon to process files in parallel
-                        file_paths.par_iter().enumerate().for_each(|(index, file_path)| {
+                        let mut file_params_array: Vec<AddFileParams> = Vec::new();
+
+                        for path in file_paths_for_thread {
                             let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
-                            let file_path_str = file_path.to_str().unwrap_or("");
+                            let file_path_str = path.to_str().unwrap_or("");
                             
                             let mut connection = connection.lock().unwrap();
                             let file_params = AddFileParams {
@@ -244,17 +247,16 @@ impl Application for Archiver {
                                 file_path_str,
                                 profile_id: &profile_id,
                                 tx_clone: &mut tx_clone,
-                                index,
-                                total_files: file_paths.len(),
+                                index: 0,
+                                total_files: 0,
                             };
-                            let _ = rs_timeskip_archiver::add_file(file_params);
-                        });
+                            file_params_array.push(file_params);
+                        }
 
-                        self.file_upload_progress.total = file_paths_for_length.len();
+                        self.array_of_fileparams = file_params_array;
+                        let _ = Download::new(0, self.array_of_fileparams);
 
-                        let rx_clone = Arc::new(Mutex::new(rx));
-
-                        Command::perform(async move { Arc::clone(&rx_clone) }, Message::UpdateFileUploadProgress)
+                        Command::none()
                     } else {
                         // Handle file dialog error here...
                         Command::none()
@@ -409,10 +411,10 @@ impl Application for Archiver {
     }
 }
 
-#[derive(Debug)]
-struct Download {
+struct Download<'a> {
     id: usize,
     state: State,
+    parameter: AddFileParams<'a>
 }
 
 #[derive(Debug)]
@@ -423,11 +425,12 @@ enum State {
     Errored,
 }
 
-impl Download {
-    pub fn new(id: usize) -> Self {
+impl<'a> Download<'a> {
+    pub fn new(id: usize, parameter: AddFileParams) -> Self {
         Download {
             id,
             state: State::Idle,
+            parameter,
         }
     }
 
@@ -464,7 +467,7 @@ impl Download {
     pub fn subscription(&self) -> Subscription<Message> {
         match self.state {
             State::Downloading { .. } => {
-                download::file(self.id, "https://speed.hetzner.de/100MB.bin?")
+                download::file(self.id, self.parameter)
                     .map(Message::DownloadProgressed)
             }
             _ => Subscription::none(),

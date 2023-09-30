@@ -1,27 +1,32 @@
 use iced::subscription;
 
 use std::hash::Hash;
+use rs_timeskip_archiver::{AddFileParams, FileParams};
 
 // Just a little utility function
-pub fn file<I: 'static + Hash + Copy + Send + Sync, T: ToString>(
+pub fn file<I: 'static + Hash + Copy + Send + Sync>(
     id: I,
-    url: T,
+    file_bundle: AddFileParams,
 ) -> iced::Subscription<(I, Progress)> {
-    subscription::unfold(id, State::Ready(url.to_string()), move |state| {
+    subscription::unfold(id, State::Ready(file_bundle), move |state| {
         download(id, state)
     })
 }
 
-#[derive(Debug, Hash, Clone)]
-pub struct Download<I> {
+#[derive(Debug, Clone)]
+pub struct Download<'a, I> {
     id: I,
-    url: String,
+    param_file_array: AddFileParams<'a>,
 }
 
-async fn download<I: Copy>(id: I, state: State) -> ((I, Progress), State) {
+async fn download<'a, I: Copy>(id: I, state: State<'a>) -> ((I, Progress), State<'a>) {
     match state {
-        State::Ready(url) => {
-            let response = reqwest::get(&url).await;
+        State::Ready(param_file_array) => {
+            let response: Result<Vec<_>, _> = param_file_array
+                .iter()
+                .enumerate()
+                .map(|(index, file_path)| rs_timeskip_archiver::add_file(*file_path))
+                .collect();
 
             match response {
                 Ok(response) => {
@@ -80,8 +85,8 @@ pub enum Progress {
     Errored,
 }
 
-pub enum State {
-    Ready(String),
+pub enum State<'a> {
+    Ready(Vec<AddFileParams<'a>>),
     Downloading {
         response: reqwest::Response,
         total: u64,
