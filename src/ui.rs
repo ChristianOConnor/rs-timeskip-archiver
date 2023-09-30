@@ -2,8 +2,7 @@ use diesel::SqliteConnection;
 use futures::channel::mpsc::{self, Sender};
 use futures::StreamExt;
 use iced::widget::{
-    text_input, Button, Column, Container, PickList, ProgressBar, Row, Rule, Scrollable, Space,
-    Text,
+    text_input, button, Button, column, Column, Container, PickList, ProgressBar, Row, Rule, Scrollable, Space, text, Text,
 };
 use iced::Subscription;
 use iced::{Alignment, Application, Command, Element, Length, Settings};
@@ -13,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use rayon::prelude::*;
-use tokio::fs;
+mod download;
 
 
 
@@ -39,6 +38,9 @@ pub enum Message {
     ProfileRefresh,
     Refresh,
     UpdateFileUploadProgress(Arc<Mutex<mpsc::Receiver<(usize, usize)>>>),
+    Add,
+    Download(usize),
+    DownloadProgressed((usize, download::Progress)),
 }
 
 // Define the possible loading states for the UI
@@ -61,6 +63,8 @@ pub struct Archiver {
     selected_file: Option<File>,
     loading_state: LoadingState,
     file_upload_progress: FileUploadProgress,
+    downloads: Vec<Download>,
+    last_id: usize,
 }
 
 // Define the file upload progress struct
@@ -105,6 +109,8 @@ impl Application for Archiver {
                     current: 0,
                     total: 0,
                 },
+                downloads: vec![Download::new(0)],
+                last_id: 0,
             },
             // Load the profiles asynchronously and send a message when done
             Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles),
@@ -192,6 +198,26 @@ impl Application for Archiver {
                 // Open a file dialog to choose files to upload
                 println!("Open file dialog called.");
                 Command::perform(open_file_dialog(), Message::FileChosen)
+            }
+            Message::Add => {
+                self.last_id += 1;
+
+                self.downloads.push(Download::new(self.last_id));
+                Command::none()
+            }
+            Message::Download(index) => {
+                if let Some(download) = self.downloads.get_mut(index) {
+                    download.start();
+                }
+                Command::none()
+            }
+            Message::DownloadProgressed((id, progress)) => {
+                if let Some(download) =
+                    self.downloads.iter_mut().find(|download| download.id == id)
+                {
+                    download.progress(progress);
+                }
+                Command::none()
             }
             Message::FileChosen(file_paths_result) => {
                 // Upload the chosen files for the selected profile
@@ -288,16 +314,22 @@ impl Application for Archiver {
 
     // Subscribe to progress updates if there are any ongoing file uploads
     fn subscription(&self) -> Subscription<Message> {
-        println!("Checking subscription. Current: {}, Total: {}", self.file_upload_progress.current, self.file_upload_progress.total);
-        if self.file_upload_progress.total > 0 && self.file_upload_progress.current < self.file_upload_progress.total {
-            iced::time::every(Duration::from_millis(500)).map(|_| Message::RunBlank)
-        } else {
-            Subscription::none()
-        }
+        Subscription::batch(self.downloads.iter().map(Download::subscription))
     }
 
     // Define the UI view
     fn view(&self) -> Element<Self::Message> {
+        let downloads = Column::with_children(
+            self.downloads.iter().map(Download::view).collect(),
+        )
+        .push(
+            button("Add another download")
+                .on_press(Message::Add)
+                .padding(10),
+        )
+        .spacing(20)
+        .align_items(Alignment::End);
+
         let pick_list = PickList::new(
             &self.profiles,
             self.selected_profile.clone(),
@@ -365,15 +397,115 @@ impl Application for Archiver {
             Column::new()
                 .push(Space::new(Length::Fill, Length::Fill)) // Add this line
                 .push(Text::new("File Upload Progress"))
-                .push(
-                    ProgressBar::new(0.0..=1.0, self.file_upload_progress.ratio())
-                        .width(Length::Fill), // Make it span the width of the window
-                ),
+                .push(downloads),
         );
 
         Container::new(content)
             .width(Length::Fill)
             .height(Length::Fill)
+            .into()
+    }
+}
+
+#[derive(Debug)]
+struct Download {
+    id: usize,
+    state: State,
+}
+
+#[derive(Debug)]
+enum State {
+    Idle,
+    Downloading { progress: f32 },
+    Finished,
+    Errored,
+}
+
+impl Download {
+    pub fn new(id: usize) -> Self {
+        Download {
+            id,
+            state: State::Idle,
+        }
+    }
+
+    pub fn start(&mut self) {
+        match self.state {
+            State::Idle { .. }
+            | State::Finished { .. }
+            | State::Errored { .. } => {
+                self.state = State::Downloading { progress: 0.0 };
+            }
+            State::Downloading { .. } => {}
+        }
+    }
+
+    pub fn progress(&mut self, new_progress: download::Progress) {
+        if let State::Downloading { progress } = &mut self.state {
+            match new_progress {
+                download::Progress::Started => {
+                    *progress = 0.0;
+                }
+                download::Progress::Advanced(percentage) => {
+                    *progress = percentage;
+                }
+                download::Progress::Finished => {
+                    self.state = State::Finished;
+                }
+                download::Progress::Errored => {
+                    self.state = State::Errored;
+                }
+            }
+        }
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        match self.state {
+            State::Downloading { .. } => {
+                download::file(self.id, "https://speed.hetzner.de/100MB.bin?")
+                    .map(Message::DownloadProgressed)
+            }
+            _ => Subscription::none(),
+        }
+    }
+
+    pub fn view(&self) -> Element<Message> {
+        let current_progress = match &self.state {
+            State::Idle { .. } => 0.0,
+            State::Downloading { progress } => *progress,
+            State::Finished { .. } => 100.0,
+            State::Errored { .. } => 0.0,
+        };
+
+        //let progress_bar = progress_bar(0.0..=100.0, current_progress);
+
+        let control: Element<_> = match &self.state {
+            State::Idle => button("Start the download!")
+                .on_press(Message::Download(self.id))
+                .into(),
+            State::Finished => {
+                column!["Download finished!", button("Start again")]
+                    .spacing(10)
+                    .align_items(Alignment::Center)
+                    .into()
+            }
+            State::Downloading { .. } => {
+                text(format!("Downloading... {current_progress:.2}%")).into()
+            }
+            State::Errored => column![
+                "Something went wrong :(",
+                button("Try again").on_press(Message::Download(self.id)),
+            ]
+            .spacing(10)
+            .align_items(Alignment::Center)
+            .into(),
+        };
+
+        Column::new()
+            .spacing(10)
+            .padding(10)
+            .align_items(Alignment::Center)
+            .push(control)
             .into()
     }
 }
