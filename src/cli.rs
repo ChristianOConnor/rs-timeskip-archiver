@@ -148,7 +148,7 @@ pub fn run_cli(connection: &mut SqliteConnection) {
                             index: 1,
                             total_files: 1,
                         };
-                        match add_file(file_param) {
+                        match add_file(&mut file_param) {
                             Ok(file_find_response) => println!("{}", file_find_response),
                             Err(e) => println!("Failed to add file: {}", e),
                         }

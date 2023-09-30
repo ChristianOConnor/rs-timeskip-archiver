@@ -83,7 +83,7 @@ pub fn get_profiles(conn: &mut SqliteConnection) -> Vec<Profile> {
         .expect("Error loading profiles")
 }
 
-pub fn add_file(file_param: AddFileParams) -> Result<usize, diesel::result::Error> {
+pub fn add_file(file_param: &mut AddFileParams) -> Result<usize, diesel::result::Error> {
     println!("add_file started for {}", file_param.file_path_str);
     use schema::files;
 

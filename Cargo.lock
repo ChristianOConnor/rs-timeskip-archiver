@@ -2676,6 +2676,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "hex",
+ "hyper",
  "iced",
  "rayon",
  "reqwest",
