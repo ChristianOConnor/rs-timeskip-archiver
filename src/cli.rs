@@ -1,20 +1,16 @@
-use dialoguer::{theme::ColorfulTheme, Select, Input};
-use rs_timeskip_archiver::{create_profile, get_profiles, add_file, get_files};
+use dialoguer::{theme::ColorfulTheme, Input, Select};
+use rs_timeskip_archiver::{add_file, create_profile, get_files, get_profiles};
 use tabled::{builder::Builder, settings::Style};
 
+use diesel::prelude::*;
 use std::fs::File;
 use std::io::Write;
-use diesel::prelude::*;
+use std::sync::{Arc, Mutex};
 
-
-
-pub fn run_cli(connection: &mut SqliteConnection) {
+pub fn run_cli(connection: SqliteConnection) {
+    let connection = Arc::new(Mutex::new(connection));
     loop {
-        let mainmenu = &[
-            "Create Profile",
-            "Select Profile",
-            "Exit",
-        ];
+        let mainmenu = &["Create Profile", "Select Profile", "Exit"];
 
         let selection_mainmenu = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("Welcome, Please select from the following options:")
@@ -34,13 +30,18 @@ pub fn run_cli(connection: &mut SqliteConnection) {
                     break;
                 }
 
-                let _ = create_profile(connection, &input);
+                let conn = Arc::clone(&connection);
+                let _ = create_profile(conn, &input);
                 break;
             }
         } else if selection_mainmenu == 1 {
             loop {
-                let profiles_response = get_profiles(connection);
-                let mut profiles: Vec<String> = profiles_response.iter().map(|profile| profile.profile_name.clone()).collect();
+                let conn = Arc::clone(&connection);
+                let profiles_response = get_profiles(conn);
+                let mut profiles: Vec<String> = profiles_response
+                    .iter()
+                    .map(|profile| profile.profile_name.clone())
+                    .collect();
                 profiles.push("Back".to_string());
 
                 if profiles.is_empty() {
@@ -63,11 +64,7 @@ pub fn run_cli(connection: &mut SqliteConnection) {
                 let selected_profile = &profiles_response[selection_profile];
 
                 loop {
-                    let profile_menu = &[
-                        "Display all files",
-                        "Enter a new file path",
-                        "Back",
-                    ];
+                    let profile_menu = &["Display all files", "Enter a new file path", "Back"];
 
                     let selection_profile_menu = Select::with_theme(&ColorfulTheme::default())
                         .with_prompt("Please select an option:")
@@ -77,47 +74,58 @@ pub fn run_cli(connection: &mut SqliteConnection) {
                         .unwrap();
 
                     if selection_profile_menu == 0 {
-                        let files_display_choice_menu = &[
-                            "Display in terminal",
-                            "Print to File",
-                            "Back",
-                        ];
+                        let files_display_choice_menu =
+                            &["Display in terminal", "Print to File", "Back"];
 
-                        let selection_files_display_choice_menu = Select::with_theme(&ColorfulTheme::default())
-                            .with_prompt("Please select an option:")
-                            .default(0)
-                            .items(&files_display_choice_menu[..])
-                            .interact()
-                            .unwrap();
-                        
+                        let selection_files_display_choice_menu =
+                            Select::with_theme(&ColorfulTheme::default())
+                                .with_prompt("Please select an option:")
+                                .default(0)
+                                .items(&files_display_choice_menu[..])
+                                .interact()
+                                .unwrap();
+
                         if selection_files_display_choice_menu == 0 {
                             println!("Files in profile '{}':", selected_profile.profile_name);
-                            let files_display = get_files(connection, &selected_profile.id);
+                            let conn = Arc::clone(&connection);
+                            let files_display = get_files(conn, &selected_profile.id);
                             let mut builder = Builder::new();
 
                             for file in &files_display {
                                 let file_name = file.file_name.chars().take(20).collect::<String>(); // truncate to 20 characters
                                 let sha256 = file.sha256.chars().take(20).collect::<String>(); // truncate to 20 characters
-                                let created_at = file.created_at.to_string().chars().take(20).collect::<String>(); // truncate to 20 characters
-                                let updated_at = file.updated_at.to_string().chars().take(20).collect::<String>(); // truncate to 20 characters
+                                let created_at = file
+                                    .created_at
+                                    .to_string()
+                                    .chars()
+                                    .take(20)
+                                    .collect::<String>(); // truncate to 20 characters
+                                let updated_at = file
+                                    .updated_at
+                                    .to_string()
+                                    .chars()
+                                    .take(20)
+                                    .collect::<String>(); // truncate to 20 characters
 
                                 builder.push_record([file_name, sha256, created_at, updated_at]);
                             }
-                            let table = builder.build()
-                                .with(Style::ascii_rounded())
-                                .to_string();
+                            let table = builder.build().with(Style::ascii_rounded()).to_string();
                             println!("{}", table);
                         } else if selection_files_display_choice_menu == 1 {
                             println!("Files in profile '{}':", selected_profile.profile_name);
-                            let files_display = get_files(connection, &selected_profile.id);
+                            let conn = Arc::clone(&connection);
+                            let files_display = get_files(conn, &selected_profile.id);
                             let mut builder = Builder::new();
-                            
+
                             for file in &files_display {
-                                builder.push_record([file.file_name.to_string(), file.sha256.to_string(), file.created_at.to_string(), file.updated_at.to_string()]);
+                                builder.push_record([
+                                    file.file_name.to_string(),
+                                    file.sha256.to_string(),
+                                    file.created_at.to_string(),
+                                    file.updated_at.to_string(),
+                                ]);
                             }
-                            let table = builder.build()
-                                .with(Style::ascii_rounded())
-                                .to_string();
+                            let table = builder.build().with(Style::ascii_rounded()).to_string();
 
                             let mut f = File::create("files_in_profile_results.txt").unwrap();
                             f.write_all(table.as_bytes()).unwrap();
@@ -138,7 +146,15 @@ pub fn run_cli(connection: &mut SqliteConnection) {
 
                         let (tx, _rx) = futures::channel::mpsc::channel::<(usize, usize)>(1);
                         let mut tx_clone = tx.clone();
-                        match add_file(connection, &filepath_input, &selected_profile.id, &mut tx_clone, 1, 1) {
+                        let conn = Arc::clone(&connection);
+                        match add_file(
+                            conn,
+                            filepath_input,
+                            &selected_profile.id,
+                            &mut tx_clone,
+                            1,
+                            1,
+                        ) {
                             Ok(file_find_response) => println!("{}", file_find_response),
                             Err(e) => println!("Failed to add file: {}", e),
                         }

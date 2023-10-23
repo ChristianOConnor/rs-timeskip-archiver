@@ -1,6 +1,5 @@
 use diesel::SqliteConnection;
 use futures::channel::mpsc::{self, Sender};
-use futures::StreamExt;
 use iced::widget::{
     text_input, Button, Column, Container, PickList, ProgressBar, Row, Rule, Scrollable, Space,
     Text,
@@ -8,10 +7,10 @@ use iced::widget::{
 use iced::Subscription;
 use iced::{Alignment, Application, Command, Element, Length, Settings};
 use rs_timeskip_archiver::models::{File, Profile};
+use rs_timeskip_archiver::thread_pool::ThreadPool;
 use rs_timeskip_archiver::{get_files, get_profiles};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 pub fn run_ui(connection: SqliteConnection) -> Result<(), iced::Error> {
     // Run the UI with the given database connection
@@ -57,6 +56,7 @@ pub struct Archiver {
     selected_file: Option<File>,
     loading_state: LoadingState,
     file_upload_progress: FileUploadProgress,
+    pool: ThreadPool,
 }
 
 // Define the file upload progress struct
@@ -101,6 +101,7 @@ impl Application for Archiver {
                     current: 0,
                     total: 0,
                 },
+                pool: ThreadPool::new(4),
             },
             // Load the profiles asynchronously and send a message when done
             Command::perform(async { Message::LoadProfiles }, |_| Message::LoadProfiles),
@@ -119,7 +120,7 @@ impl Application for Archiver {
             Message::LoadProfiles => {
                 // Load the profiles from the database and send a message when done
                 let connection = Arc::clone(&self.connection);
-                let profiles = get_profiles(&mut *connection.lock().unwrap());
+                let profiles = get_profiles(connection);
                 Command::perform(async { profiles }, Message::ProfilesLoaded)
             }
             Message::ProfilesLoaded(profiles) => {
@@ -135,10 +136,7 @@ impl Application for Archiver {
             Message::CreateProfile => {
                 // Create a new profile with the given name
                 let connection = Arc::clone(&self.connection);
-                let _ = rs_timeskip_archiver::create_profile(
-                    &mut *connection.lock().unwrap(),
-                    &self.input_value,
-                );
+                let _ = rs_timeskip_archiver::create_profile(connection, &self.input_value);
                 self.input_value.clear();
                 Command::perform(async { Message::ProfileRefresh }, |msg| msg)
             }
@@ -151,15 +149,13 @@ impl Application for Archiver {
                 // Load the files for the selected profile
                 if let Some(profile) = &self.selected_profile {
                     let connection = Arc::clone(&self.connection);
-                    let files = get_files(&mut *connection.lock().unwrap(), &profile.id);
+                    let files = get_files(connection, &profile.id);
                     Command::perform(async { files }, Message::FilesLoaded)
                 } else {
                     Command::none()
                 }
             }
-            Message::ProgressTick(_) => {
-                Command::none()
-            }
+            Message::ProgressTick(_) => Command::none(),
             Message::FilesLoaded(files) => {
                 // Update the UI with the loaded files
                 self.files = files;
@@ -180,7 +176,6 @@ impl Application for Archiver {
                 if let Some(profile) = &self.selected_profile {
                     if let Ok(file_paths) = file_paths_result.clone() {
                         // Clone necessary data for thread.
-                        let connection = Arc::clone(&self.connection);
                         let profile_id = profile.id.clone();
                         let file_paths_for_length = file_paths.clone();
                         let file_paths_for_thread = file_paths.clone();
@@ -189,22 +184,23 @@ impl Application for Archiver {
                         let (tx, mut rx) = mpsc::channel::<(usize, usize)>(1);
 
                         // Start a single worker thread to handle all file uploads.
-                        std::thread::spawn(move || {
-                            for (index, file_path) in file_paths_for_thread.iter().enumerate() {
-                                let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
-                                let file_path_str = file_path.to_str().unwrap_or("");
+                        for (index, file_path) in file_paths_for_thread.iter().enumerate() {
+                            let len = file_paths_for_thread.len();
+                            let mut tx_clone = tx.clone(); // clone the sender and declare it as mutable
+                            let connection = Arc::clone(&self.connection);
+                            let file_path_str = file_path.to_str().unwrap_or("").to_string();
 
-                                let mut connection = connection.lock().unwrap();
+                            self.pool.execute(move || {
                                 let _ = rs_timeskip_archiver::add_file(
-                                    &mut *connection,
+                                    connection,
                                     file_path_str,
                                     &profile_id,
                                     &mut tx_clone,
                                     index,
-                                    file_paths_for_thread.len(),
+                                    len,
                                 );
-                            }
-                        });
+                            })
+                        }
 
                         self.file_upload_progress.total = file_paths_for_length.len();
 
@@ -260,7 +256,7 @@ impl Application for Archiver {
                 // Refresh the files for the selected profile
                 if let Some(profile) = &self.selected_profile {
                     let connection = Arc::clone(&self.connection);
-                    let files = get_files(&mut *connection.lock().unwrap(), &profile.id);
+                    let files = get_files(connection, &profile.id);
                     Command::perform(async { files }, Message::FilesLoaded)
                 } else {
                     Command::none()
